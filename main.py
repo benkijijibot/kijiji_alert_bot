@@ -5,6 +5,9 @@ import os
 import time
 import random
 
+# ==============================
+# CONFIG
+# ==============================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
@@ -16,28 +19,52 @@ REFRESH_MAX = 60
 
 seen_links = set()
 
+# ==============================
+# FUNCTIONS
+# ==============================
+
 def send_telegram(text):
-    if BOT_TOKEN and CHAT_ID:
+    if BOT_TOKEN is None or CHAT_ID is None:
+        print("⚠️ BOT_TOKEN or CHAT_ID not set!")
+        return
+    try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         data = {"chat_id": CHAT_ID, "text": text}
-        requests.post(url, data=data)
+        resp = requests.post(url, data=data)
+        if resp.status_code == 200:
+            print(f"✅ Telegram message sent: {text.splitlines()[0]}")
+        else:
+            print(f"⚠️ Telegram failed ({resp.status_code}): {resp.text}")
+    except Exception as e:
+        print(f"⚠️ Telegram error: {e}")
+
+# ==============================
+# MAIN SCRAPER
+# ==============================
 
 async def scrape_kijiji():
     global seen_links
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+    print("🚀 Script started")
+    print("🔑 Environment loaded:", "BOT_TOKEN set" if BOT_TOKEN else "BOT_TOKEN missing",
+          "| CHAT_ID set" if CHAT_ID else "CHAT_ID missing")
 
-        print("🚗 Kijiji Playwright bot started... watching for new listings!")
+    async with async_playwright() as p:
+        try:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            print("🌐 Browser launched successfully")
+        except Exception as e:
+            print("⚠️ Failed to launch browser:", e)
+            return
 
         while True:
             try:
+                print("🔍 Fetching Kijiji listings...")
                 await page.goto(BASE_URL + SEARCH_PARAMS, timeout=60000)
                 await page.wait_for_timeout(5000)
 
                 listings = await page.query_selector_all("div.search-item")
-
-                print(f"🔍 Found {len(listings)} listings.")
+                print(f"📝 Found {len(listings)} listings on page")
 
                 for item in listings:
                     title_tag = await item.query_selector(".title")
@@ -58,17 +85,20 @@ async def scrape_kijiji():
                         seen_links.add(link)
                         message = f"📢 NEW LISTING:\n{title}\n💰 {price}\n📅 {year}\n🏃 {kms}\n🔗 {link}"
                         send_telegram(message)
-                        print(f"✅ Sent: {title}")
 
                 sleep_time = random.randint(REFRESH_MIN, REFRESH_MAX)
                 print(f"⏱ Sleeping {sleep_time}s...\n")
                 await asyncio.sleep(sleep_time)
 
             except Exception as e:
-                print(f"⚠️ Error: {e}")
+                print(f"⚠️ Scraper error: {e}")
                 await asyncio.sleep(30)
 
         await browser.close()
+
+# ==============================
+# ENTRY POINT
+# ==============================
 
 if __name__ == "__main__":
     asyncio.run(scrape_kijiji())
