@@ -1,13 +1,7 @@
 services:
   - type: web
-    name: kijiji-alert-bot
+    name: kijiji-rss-bot
     env: python
     plan: starter
-    buildCommand: |
-      apt-get update
-      apt-get install -y curl
-      curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-      apt-get install -y nodejs
-      pip install -r requirements.txt
-      playwright install chromium
+    buildCommand: pip install -r requirements.txt
     startCommand: python main.py
