@@ -1,102 +1,118 @@
 import requests
-import xml.etree.ElementTree as ET
-import os
 import time
 import random
+import os
+import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
 
 # ==============================
-# CONFIG
+# CONFIGURATION
 # ==============================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-# Kijiji RSS feed for Ontario cars & trucks with filters
-# price: 1000–15000, km: 1–260000, year: 2010–2025
-RSS_URL = (
-    "https://www.kijiji.ca/rss-srp/c174l9004?price=1000__15000"
-    "&kilometres=1__260000&year=2010__2025&location=Ontario"
-)
+# Kijiji RSS feed URL (Ontario, Cars & Trucks, your filters)
+RSS_URL = "https://www.kijiji.ca/rss-srp/c174l9004?price=1000__15000&kilometres=1__260000&year=2010__2025&location=Ontario"
 
-# Refresh interval (seconds)
+# Refresh interval in seconds
 REFRESH_MIN = 30
 REFRESH_MAX = 60
-
-seen_links = set()
 
 # ==============================
 # FUNCTIONS
 # ==============================
 
-def send_telegram(text):
+def send_telegram_message(text):
+    """Send alert message via Telegram bot."""
     if not BOT_TOKEN or not CHAT_ID:
         print("⚠️ BOT_TOKEN or CHAT_ID not set!")
         return
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": text}
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        resp = requests.post(url, data={"chat_id": CHAT_ID, "text": text})
-        if resp.status_code == 200:
-            print(f"✅ Alert sent: {text.splitlines()[0]}")
+        response = requests.post(url, data=payload)
+        if response.status_code == 200:
+            print("✅ Alert sent")
         else:
-            print(f"⚠️ Telegram failed ({resp.status_code}): {resp.text}")
+            print(f"⚠️ Telegram API error: {response.status_code}, {response.text}")
     except Exception as e:
-        print(f"⚠️ Telegram error: {e}")
+        print("⚠️ Exception sending Telegram message:", e)
 
-def fetch_listings():
+def fetch_rss_listings():
+    """Fetch listings from Kijiji RSS feed and parse price, year, km."""
     try:
-        resp = requests.get(RSS_URL)
-        root = ET.fromstring(resp.content)
-        listings = []
+        response = requests.get(RSS_URL, timeout=15)
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+        items = root.findall(".//item")
+        results = []
 
-        for item in root.findall(".//item"):
-            title = item.find("title").text
-            link = item.find("link").text
-            description = item.find("description").text or ""
+        for item in items:
+            title = item.findtext("title", default="N/A")
+            link = item.findtext("link", default="N/A")
+            description_html = item.findtext("description", default="")
 
-            # extract price, year, kms from description
+            # Parse description HTML for price, year, km
+            soup = BeautifulSoup(description_html, "html.parser")
             price = "N/A"
             year = "N/A"
             kms = "N/A"
 
-            if "Price:" in description:
-                price = description.split("Price:")[1].split("<")[0].strip()
-            if "Year:" in description:
-                year = description.split("Year:")[1].split("<")[0].strip()
-            if "Kms:" in description:
-                kms = description.split("Kms:")[1].split("<")[0].strip()
+            # Look for text patterns
+            text = soup.get_text(separator="\n").split("\n")
+            for line in text:
+                line = line.strip()
+                if line.lower().startswith("price"):
+                    price = line.split(":")[-1].strip()
+                elif line.lower().startswith("year"):
+                    year = line.split(":")[-1].strip()
+                elif line.lower().startswith("kilometres") or line.lower().startswith("km"):
+                    kms = line.split(":")[-1].strip()
 
-            listings.append({
+            results.append({
                 "title": title,
                 "link": link,
                 "price": price,
                 "year": year,
                 "kms": kms
             })
-        return listings
+
+        print(f"🔍 Found {len(results)} listings in RSS feed")
+        return results
+
     except Exception as e:
-        print(f"⚠️ RSS fetch error: {e}")
+        print("⚠️ Error fetching RSS:", e)
         return []
 
+# ==============================
+# MAIN LOOP
+# ==============================
+
 def main():
-    print("🚗 Kijiji RSS bot started")
-    global seen_links
+    print("🚗 Kijiji RSS bot started... watching for new listings!")
+    seen = set()
 
     while True:
-        listings = fetch_listings()
+        listings = fetch_rss_listings()
+        new_count = 0
 
         for listing in listings:
-            if listing["link"] not in seen_links:
-                seen_links.add(listing["link"])
+            if listing["link"] not in seen:
+                seen.add(listing["link"])
                 message = (
-                    f"📢 NEW LISTING:\n{listing['title']}\n"
-                    f"💰 {listing['price']}\n"
-                    f"📅 {listing['year']}\n"
-                    f"🏃 {listing['kms']}\n"
+                    f"📢 NEW LISTING:\n"
+                    f"{listing['title']}\n"
+                    f"💰 Price: {listing['price']}\n"
+                    f"📅 Year: {listing['year']}\n"
+                    f"🏃 KMs: {listing['kms']}\n"
                     f"🔗 {listing['link']}"
                 )
-                send_telegram(message)
+                send_telegram_message(message)
+                new_count += 1
 
+        print(f"🆕 {new_count} new listings processed")
         sleep_time = random.randint(REFRESH_MIN, REFRESH_MAX)
-        print(f"⏱ Sleeping {sleep_time}s...")
+        print(f"⏱ Sleeping {sleep_time} seconds...\n")
         time.sleep(sleep_time)
 
 if __name__ == "__main__":
